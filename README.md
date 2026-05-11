@@ -77,25 +77,3 @@ resume_analyzer/
 ├── requirements.txt    # Python dependencies
 └── README.md           # This file
 ```
-
----
-
-## 💡 Tips for Best Results
-
-- Use a **text-based PDF** (not a scanned image)
-- Paste the **full job description** including requirements & responsibilities
-- Aim for a **60–80% match score** — 100% looks keyword-stuffed
-- **Tailor your resume** for each application using the missing keywords
-
----
-
-## 🌟 Resume Talking Points
-
-When explaining this project in interviews:
-- *"Built an NLP pipeline using TF-IDF vectorization and cosine similarity to quantify semantic overlap between resume and job description text."*
-- *"Implemented a keyword gap analysis engine that identifies missing technical skills against a curated domain-specific lexicon."*
-- *"Designed a responsive, production-grade Streamlit interface with custom CSS theming."*
-
----
-
-*Built with Python · Streamlit · scikit-learn · PyPDF2*
