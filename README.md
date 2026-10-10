@@ -1,6 +1,6 @@
 # ⚡ ResumeIQ — AI Resume Analyzer
 
-> Upload your resume → Paste a job description → Get an instant match score + actionable suggestions.
+> Upload your resume → Paste a job description → Get a match score, a skill gap and practical suggestions.
 
 ---
 
@@ -29,7 +29,7 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
-Your browser will open at `http://localhost:8501` 🎉
+Your browser will open at `http://localhost:8501`.
 
 ---
 
@@ -37,23 +37,26 @@ Your browser will open at `http://localhost:8501` 🎉
 
 | Step | What happens |
 |------|-------------|
-| 1 | **PDF Extraction** — `PyPDF2` pulls raw text from your resume |
-| 2 | **Text Cleaning** — lowercasing, punctuation removal, stopword filtering |
-| 3 | **TF-IDF Vectorization** — both texts converted to numerical vectors (bigrams) |
-| 4 | **Cosine Similarity** — measures directional closeness of the two vectors |
-| 5 | **Keyword Gap Analysis** — 50+ tech skills checked against both documents |
-| 6 | **Suggestions** — context-aware improvement tips generated from results |
+| 1 | **PDF extraction**: `pypdf` reads the text of a text-based PDF resume |
+| 2 | **Text cleaning**: lowercasing and punctuation removal (symbols like `+`, `#`, `/` are kept for C++, C#, CI/CD) |
+| 3 | **TF-IDF vectorization**: resume and job description become numeric vectors (unigrams + bigrams). The vocabulary comes from the job description only, so resume-only words do not dilute the score |
+| 4 | **Cosine similarity**: measures how close the two vectors are, shown as the match score |
+| 5 | **Keyword gap analysis**: about 90 technical skills are searched with whole-word matching, including aliases (e.g. ML = machine learning) |
+| 6 | **Section check**: looks for headings such as Skills, Experience, Education, Projects, Certifications |
+| 7 | **Suggestions**: rule-based tips based on the score, the missing skills and the missing sections |
+
+The match score measures **keyword (lexical) overlap**, not meaning. For example, it cannot tell that two different words mean the same thing unless they are in the alias list.
 
 ---
 
 ## ✨ Features
 
-- 📊 **Match Score (%)** — TF-IDF + Cosine Similarity score
-- ✅ **Matched Keywords** — skills found in both resume & JD  
-- ❌ **Missing Keywords** — high-value skills to add
-- 🏗️ **Section Detector** — checks for Skills, Experience, Education, Projects, Certifications
-- 💡 **Smart Suggestions** — tailored advice based on your specific gap
-- 🎨 **Polished dark UI** — professional enough to screenshot for your portfolio
+- 📊 **Match score (%)**: TF-IDF + cosine similarity
+- ✅ **Matched keywords** and ❌ **missing keywords**
+- 📈 **Skill coverage**: share of the JD's skills that your resume has
+- 🏗️ **Section analysis**: heading-based check
+- 💡 **Rule-based suggestions**
+- 🎨 **Dark custom UI** built with Streamlit and custom CSS
 
 ---
 
@@ -61,11 +64,10 @@ Your browser will open at `http://localhost:8501` 🎉
 
 | Layer | Technology |
 |-------|-----------|
-| UI | Streamlit |
-| PDF Parsing | PyPDF2 |
-| NLP / ML | scikit-learn (TF-IDF, Cosine Similarity) |
-| Keyword Matching | Custom skill dictionary (50+ tech terms) |
-| Styling | Custom CSS (dark theme, Google Fonts) |
+| UI | Streamlit + custom CSS |
+| PDF parsing | pypdf |
+| NLP / ML | scikit-learn (TF-IDF, cosine similarity) |
+| Keyword matching | Skill dictionary with aliases and regex whole-word matching |
 
 ---
 
@@ -73,7 +75,29 @@ Your browser will open at `http://localhost:8501` 🎉
 
 ```
 resume_analyzer/
-├── app.py              # Main Streamlit application
+├── app.py              # Streamlit application (UI + NLP logic)
 ├── requirements.txt    # Python dependencies
 └── README.md           # This file
 ```
+
+---
+
+## ⚠️ Limitations
+
+- Works with **text-based PDFs** only (not scanned images)
+- Keyword based: it does not understand meaning or the quality of your experience
+- The skill list is manual, so skills outside the list are not detected
+- The score cut-offs (Excellent / Good / Fair) are heuristic, not calibrated on labelled data
+- Results disappear if you interact with the page after analysing (no session state yet)
+
+## 🔭 Future Improvements
+
+- Sentence embeddings for semantic matching
+- Automatic skill extraction instead of a fixed list
+- OCR support for scanned PDFs
+- Evaluation on labelled resume–job pairs
+- Keep results with `st.session_state`
+
+---
+
+*Built with Python · Streamlit · scikit-learn · pypdf*
