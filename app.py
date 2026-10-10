@@ -1,9 +1,15 @@
-import streamlit as st
-import PyPDF2
-import re
+import html
 import io
+import re
+
+import streamlit as st
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
+
+try:
+    from pypdf import PdfReader          # modern, maintained PDF library
+except ImportError:                       # fallback if only the old PyPDF2 is installed
+    from PyPDF2 import PdfReader
 
 # ── Page config ────────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -290,92 +296,156 @@ hr { border-color: var(--border) !important; margin: 2rem 0 !important; }
 """, unsafe_allow_html=True)
 
 # ── NLP helpers ────────────────────────────────────────────────────────────────
-STOPWORDS = {
-    'a','an','the','and','or','but','in','on','at','to','for','of','with',
-    'as','by','from','is','are','was','were','be','been','being','have',
-    'has','had','do','does','did','will','would','could','should','may',
-    'might','shall','can','need','dare','ought','used','it','its','this',
-    'that','these','those','i','you','he','she','we','they','me','him',
-    'her','us','them','my','your','his','our','their','what','which','who',
-    'when','where','why','how','all','each','every','both','few','more',
-    'most','other','some','such','no','not','only','same','so','than',
-    'too','very','s','t','just','about','up','also','into','through','during',
-    'before','after','above','below','between','own','off','over','under',
-    'again','further','then','once'
+
+# Skill lexicon. Each key is the "official" skill name; the list holds other ways people
+# write the same skill, so "ML" in a JD and "machine learning" in a resume count as a match.
+SKILLS = {
+    # Languages
+    "python": [], "java": [], "javascript": ["js"], "typescript": [],
+    "c++": [], "c#": [], "golang": [], "rust": [], "kotlin": [], "swift": [],
+    "ruby": [], "php": [], "scala": [], "matlab": [], "sql": [], "html": [],
+    "css": [], "bash": [], "shell scripting": ["shell script"],
+    # Frameworks / libraries
+    "react": ["react.js", "reactjs"], "angular": ["angularjs", "angular.js"],
+    "vue": ["vue.js", "vuejs"], "django": [], "flask": [], "fastapi": [],
+    "spring boot": ["springboot", "spring framework"],
+    "nodejs": ["node.js", "node js"], "expressjs": ["express.js", "express js"],
+    "tensorflow": [], "pytorch": [], "keras": [], "pandas": [], "numpy": [],
+    "scikit-learn": ["sklearn", "scikit learn"], "streamlit": [],
+    "nextjs": ["next.js", "next js"], "nestjs": ["nest.js"], "graphql": [],
+    "rest api": ["rest apis", "restful", "restful api", "restful apis"],
+    # Cloud & DevOps
+    "aws": [], "azure": [], "gcp": ["google cloud"], "docker": [],
+    "kubernetes": ["k8s"], "terraform": [], "ci/cd": ["ci cd", "cicd", "ci-cd"],
+    "jenkins": [], "github": [], "gitlab": [], "git": [], "linux": [],
+    "unix": [], "nginx": [], "apache": [],
+    # Data / AI
+    "machine learning": ["ml", "machine-learning"], "deep learning": [],
+    "nlp": ["natural language processing"], "computer vision": [],
+    "data science": [], "ai": ["artificial intelligence"],
+    "llm": ["llms", "large language model", "large language models"],
+    "rag": ["retrieval augmented generation", "retrieval-augmented generation"],
+    "postgresql": ["postgres"], "mysql": [], "mongodb": ["mongo db"],
+    "redis": [], "elasticsearch": [], "kafka": [], "spark": [], "hadoop": [],
+    "tableau": [], "powerbi": ["power bi"], "excel": [],
+    # Concepts
+    "agile": [], "scrum": [], "microservices": [], "api": ["apis"], "oop": [],
+    "solid principles": [], "tdd": [], "devops": [], "blockchain": [],
+    "cybersecurity": ["cyber security"],
 }
 
-TECH_SKILLS = {
-    # Languages
-    'python','java','javascript','typescript','c++','c#','go','rust','kotlin',
-    'swift','ruby','php','scala','r','matlab','sql','html','css','bash','shell',
-    # Frameworks/Libraries
-    'react','angular','vue','django','flask','fastapi','spring','nodejs','express',
-    'tensorflow','pytorch','keras','pandas','numpy','scikit-learn','sklearn',
-    'streamlit','nextjs','nestjs','graphql','rest','restful',
-    # Cloud & DevOps
-    'aws','azure','gcp','docker','kubernetes','terraform','ci/cd','jenkins',
-    'github','gitlab','git','linux','unix','nginx','apache',
-    # Data
-    'machine learning','deep learning','nlp','computer vision','data science',
-    'postgresql','mysql','mongodb','redis','elasticsearch','kafka','spark',
-    'hadoop','tableau','powerbi','excel',
-    # Concepts
-    'agile','scrum','microservices','api','oop','solid','tdd','devops',
-    'blockchain','cybersecurity','ml','ai','llm','rag',
+# Someone who knows MySQL / PostgreSQL knows SQL.
+IMPLIES = {"mysql": "sql", "postgresql": "sql"}
+
+# "R" is a language but also an ordinary letter, so it is matched separately:
+# only a capital R inside a skills list ("Python, R, SQL") or after words like "using R".
+R_PATTERN = re.compile(
+    r"(?:(?:^|[,;:/(|•]\s*)R(?=\s*(?:[,;:/)|]|$)))"
+    r"|(?:\b(?:using|in|with|and|or)\s+R(?![A-Za-z0-9+#&.]))",
+    re.MULTILINE,
+)
+
+# Section headings, written as plain lowercase letters so "S K I L L S" also matches.
+SECTION_HEADINGS = {
+    "Skills":         {"skills", "technicalskills", "coreskills", "keyskills", "technologies", "techstack"},
+    "Experience":     {"experience", "workexperience", "professionalexperience", "internships",
+                       "internshipexperience", "employment", "workhistory"},
+    "Education":      {"education", "academics", "academicbackground", "educationalqualifications",
+                       "qualifications"},
+    "Certifications": {"certifications", "certificationsachievements", "certificationsandachievements",
+                       "achievements", "awards", "awardsachievements"},
+    "Projects":       {"projects", "academicprojects", "personalprojects", "keyprojects"},
 }
+
+SECTION_COLORS = {
+    "Skills": "#7c6cfc", "Experience": "#6cfcd8", "Education": "#f9d56e",
+    "Certifications": "#fc8f6c", "Projects": "#fc6c8f",
+}
+
 
 def extract_text_from_pdf(file_bytes: bytes) -> str:
-    reader = PyPDF2.PdfReader(io.BytesIO(file_bytes))
-    text = ""
-    for page in reader.pages:
-        text += page.extract_text() or ""
-    return text
+    """Read every page of a text-based PDF. Returns '' if no text can be read."""
+    reader = PdfReader(io.BytesIO(file_bytes))
+    pages = [(page.extract_text() or "") for page in reader.pages]
+    text = "\n".join(pages)               # newline, so words of two pages don't stick together
+    return text.replace("\u200a", "")     # some templates put hair-spaces between heading letters
+
 
 def clean_text(text: str) -> str:
+    """Lowercase, drop punctuation (keep / # + for ci/cd, c#, c++), squeeze spaces."""
     text = text.lower()
-    text = re.sub(r'[^a-z0-9\s/#+]', ' ', text)
-    text = re.sub(r'\s+', ' ', text).strip()
+    text = re.sub(r"[^a-z0-9\s/#+]", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
     return text
 
-def tokenize(text: str):
-    return [w for w in text.split() if w not in STOPWORDS and len(w) > 2]
+
+def _term_pattern(term: str) -> str:
+    # Whole-word match: the term must not be glued to other letters or symbols, so
+    # "java" is not found inside "javascript", "sql" not inside "mysql",
+    # "scala" not inside "scalable", "ml" not inside "html".
+    return r"(?<![a-z0-9+#.])" + re.escape(term) + r"(?![a-z+#])"
+
 
 def extract_tech_keywords(text: str) -> set:
-    text_lower = text.lower()
+    """Return the set of skills found in the text (whole-word matching, with aliases)."""
+    lowered = text.lower()
     found = set()
-    # multi-word first
-    for skill in TECH_SKILLS:
-        if skill in text_lower:
+    for skill, aliases in SKILLS.items():
+        if any(re.search(_term_pattern(name), lowered) for name in [skill] + aliases):
             found.add(skill)
+    if R_PATTERN.search(text):
+        found.add("r")
+    for have, implied in IMPLIES.items():
+        if have in found:
+            found.add(implied)
     return found
 
+
+def detect_sections(raw_text: str) -> dict:
+    """A section counts as present only if a short line looks like its heading."""
+    found = {name: False for name in SECTION_HEADINGS}
+    for line in raw_text.splitlines():
+        letters = re.sub(r"[^a-z]", "", line.lower())      # 'S K I L L S' -> 'skills'
+        if not letters or len(letters) > 35:               # headings are short
+            continue
+        for name, headings in SECTION_HEADINGS.items():
+            if letters in headings:
+                found[name] = True
+    return found
+
+
 def compute_similarity(resume: str, jd: str) -> float:
-    vec = TfidfVectorizer(stop_words='english', ngram_range=(1, 2))
+    """Match score (0-100): TF-IDF vectors + cosine similarity.
+
+    The vocabulary is built from the job description only, so words that exist only in the
+    resume (names, college, hobbies) do not dilute the score.
+    """
     try:
+        jd_vocab = TfidfVectorizer(stop_words="english", ngram_range=(1, 2)).fit([jd]).vocabulary_
+        vec = TfidfVectorizer(stop_words="english", ngram_range=(1, 2),
+                              vocabulary=jd_vocab, sublinear_tf=True)
         tfidf = vec.fit_transform([resume, jd])
         score = cosine_similarity(tfidf[0:1], tfidf[1:2])[0][0]
         return round(float(score) * 100, 1)
-    except Exception:
+    except ValueError:                    # empty vocabulary (e.g. JD has no usable words)
         return 0.0
 
-def get_important_jd_keywords(jd_clean: str, top_n: int = 30) -> list:
-    vec = TfidfVectorizer(stop_words='english', ngram_range=(1, 2), max_features=200)
-    try:
-        vec.fit_transform([jd_clean])
-        feature_names = vec.get_feature_names_out()
-        scores = vec.idf_
-        pairs = sorted(zip(feature_names, scores), key=lambda x: -x[1])
-        return [w for w, _ in pairs[:top_n] if len(w) > 2]
-    except Exception:
-        return []
+
+def skill_coverage(matched: set, missing: set):
+    """% of the skills named in the JD that the resume also has (None if JD names none)."""
+    total = len(matched) + len(missing)
+    return round(100 * len(matched) / total) if total else None
+
 
 def score_color(score: float):
-    if score >= 75: return "#6cfcd8", "Excellent Match 🚀"
-    if score >= 55: return "#f9d56e", "Good Match ✨"
-    if score >= 35: return "#fc8f6c", "Fair Match 🔧"
+    # Cut-offs are heuristic (chosen from a few test resumes, not from labelled data).
+    if score >= 60: return "#6cfcd8", "Excellent Match 🚀"
+    if score >= 40: return "#f9d56e", "Good Match ✨"
+    if score >= 25: return "#fc8f6c", "Fair Match 🔧"
     return "#fc6c8f", "Needs Work 💪"
 
-def generate_suggestions(missing: list, score: float, resume_words: set, jd_words: set) -> list:
+
+def generate_suggestions(missing: list, score: float, sections: dict) -> list:
     suggestions = []
 
     if missing:
@@ -383,33 +453,41 @@ def generate_suggestions(missing: list, score: float, resume_words: set, jd_word
         suggestions.append({
             "icon": "🎯", "color": "rgba(252,108,143,0.15)", "border": "rgba(252,108,143,0.3)",
             "title": "Add Missing Technical Skills",
-            "body": f"Incorporate these high-impact keywords naturally: {', '.join(top)}. Add them to your Skills section or weave them into bullet points."
+            "body": f"If you really have them, add these keywords naturally: {', '.join(top)}. Put them in your Skills section or weave them into bullet points."
         })
 
-    if score < 55:
+    absent = [name for name, present in sections.items() if not present]
+    if absent:
+        suggestions.append({
+            "icon": "🏗️", "color": "rgba(249,213,110,0.12)", "border": "rgba(249,213,110,0.3)",
+            "title": "Add Clear Section Headings",
+            "body": f"I could not find standard headings for: {', '.join(absent)}. Use plain headings like Skills, Experience, Education, Projects so ATS parsers can read your resume."
+        })
+
+    if score < 40:
         suggestions.append({
             "icon": "📝", "color": "rgba(249,213,110,0.12)", "border": "rgba(249,213,110,0.3)",
             "title": "Mirror the Job Description Language",
-            "body": "Use the exact phrasing from the JD. ATS systems do exact keyword matching — 'led' vs 'managed' can make a difference."
+            "body": "Use the exact phrasing from the JD where it is true for you. ATS systems do keyword matching, so 'led' vs 'managed' can make a difference."
         })
 
     suggestions.append({
         "icon": "📊", "color": "rgba(108,252,216,0.1)", "border": "rgba(108,252,216,0.25)",
         "title": "Quantify Your Achievements",
-        "body": "Add numbers, percentages, and impact metrics. E.g., 'Improved model accuracy by 18%' beats 'Improved model accuracy'."
+        "body": "Add numbers, percentages, and impact metrics. E.g., 'Reduced report time by 30%' beats 'Reduced report time'."
     })
 
-    if score >= 55:
+    if score >= 40:
         suggestions.append({
             "icon": "✏️", "color": "rgba(124,108,252,0.12)", "border": "rgba(124,108,252,0.3)",
             "title": "Write a Tailored Summary",
-            "body": "Add a 2-3 line professional summary at the top that directly echoes the role's core requirements. This boosts ATS ranking significantly."
+            "body": "Add a 2-3 line professional summary at the top that echoes the role's core requirements."
         })
 
     suggestions.append({
         "icon": "🔧", "color": "rgba(252,143,108,0.1)", "border": "rgba(252,143,108,0.25)",
         "title": "Format for ATS Compatibility",
-        "body": "Use standard section headings (Experience, Education, Skills). Avoid tables, columns, or graphics — ATS parsers can't read them."
+        "body": "Use standard section headings (Experience, Education, Skills). Avoid tables, columns, or graphics, because many ATS parsers cannot read them."
     })
 
     return suggestions
@@ -430,7 +508,7 @@ with col1:
     st.markdown('<div class="card-label">📄 YOUR RESUME</div>', unsafe_allow_html=True)
     uploaded = st.file_uploader("Upload PDF Resume", type=["pdf"], label_visibility="collapsed")
     if uploaded:
-        st.markdown(f'<p style="font-size:0.8rem;color:#6cfcd8;font-family:var(--mono)">✓ {uploaded.name} loaded</p>', unsafe_allow_html=True)
+        st.markdown(f'<p style="font-size:0.8rem;color:#6cfcd8;font-family:var(--mono)">✓ {html.escape(uploaded.name)} loaded</p>', unsafe_allow_html=True)
 
 with col2:
     st.markdown('<div class="card-label">💼 JOB DESCRIPTION</div>', unsafe_allow_html=True)
@@ -455,35 +533,38 @@ if analyze:
     else:
         with st.spinner("Running NLP analysis…"):
             # Extract
-            raw_resume = extract_text_from_pdf(uploaded.read())
+            try:
+                raw_resume = extract_text_from_pdf(uploaded.read())
+            except Exception:
+                raw_resume = ""
             raw_jd = jd_text
+
+            if len(raw_resume.strip()) < 50:
+                st.error("I could not read text from this PDF. Please upload a text-based PDF (not a scanned image).")
+                st.stop()
 
             clean_resume = clean_text(raw_resume)
             clean_jd    = clean_text(raw_jd)
 
-            res_words = set(tokenize(clean_resume))
-            jd_words  = set(tokenize(clean_jd))
-
             # Score
             score = compute_similarity(clean_resume, clean_jd)
 
-            # Keyword analysis
+            # Keyword analysis (on the original text, before punctuation is removed)
             res_tech  = extract_tech_keywords(raw_resume)
             jd_tech   = extract_tech_keywords(raw_jd)
             matched   = res_tech & jd_tech
             missing   = jd_tech - res_tech
+            coverage  = skill_coverage(matched, missing)
 
-            # Important JD keywords (non-tech)
-            jd_important = get_important_jd_keywords(clean_jd, top_n=40)
-            missing_general = [k for k in jd_important if k not in clean_resume and k not in [m.lower() for m in missing]][:12]
-
-            total_missing = list(missing) + missing_general[:max(0, 12 - len(missing))]
+            # Sections
+            sections = detect_sections(raw_resume)
 
         # ── Results ────────────────────────────────────────────────────────────
         st.markdown("---")
         accent_color, score_label = score_color(score)
         circumference = 2 * 3.14159 * 62
         dash_offset   = circumference * (1 - score / 100)
+        coverage_text = f"{coverage}%" if coverage is not None else "N/A"
 
         r1, r2 = st.columns([1, 2], gap="large")
 
@@ -506,6 +587,7 @@ if analyze:
                 </div>
               </div>
               <div class="score-label" style="color:{accent_color}">{score_label}</div>
+              <div style="font-size:0.7rem;color:var(--muted);margin-top:6px">Keyword similarity (TF-IDF + cosine), not meaning</div>
               <div class="stat-row">
                 <div class="stat-box">
                   <div class="stat-val" style="color:#6cfcd8">{len(matched)}</div>
@@ -515,6 +597,10 @@ if analyze:
                   <div class="stat-val" style="color:#fc6c8f">{len(missing)}</div>
                   <div class="stat-lbl">Skills Missing</div>
                 </div>
+                <div class="stat-box">
+                  <div class="stat-val" style="color:#f9d56e">{coverage_text}</div>
+                  <div class="stat-lbl">Skill Coverage</div>
+                </div>
               </div>
             </div>
             """, unsafe_allow_html=True)
@@ -523,30 +609,29 @@ if analyze:
             # Matched keywords
             if matched:
                 st.markdown('<div class="card-label">✅ MATCHED KEYWORDS</div>', unsafe_allow_html=True)
-                pills = "".join(f'<span class="pill pill-match">{k}</span>' for k in sorted(matched))
+                pills = "".join(f'<span class="pill pill-match">{html.escape(k)}</span>' for k in sorted(matched))
                 st.markdown(f'<div class="pill-grid">{pills}</div>', unsafe_allow_html=True)
                 st.markdown("<br>", unsafe_allow_html=True)
 
             # Missing keywords
-            all_missing_display = list(missing)[:18]
-            if all_missing_display:
+            missing_display = sorted(missing)[:18]
+            if missing_display:
                 st.markdown('<div class="card-label">❌ MISSING KEYWORDS</div>', unsafe_allow_html=True)
-                pills = "".join(f'<span class="pill pill-miss">{k}</span>' for k in sorted(all_missing_display))
+                pills = "".join(f'<span class="pill pill-miss">{html.escape(k)}</span>' for k in missing_display)
                 st.markdown(f'<div class="pill-grid">{pills}</div>', unsafe_allow_html=True)
 
-        # ── Section coverage bars ──────────────────────────────────────────────
+            if not jd_tech:
+                st.markdown(
+                    '<p style="font-size:0.8rem;color:var(--muted)">No skills from my skill list were found in this job description, so there is no keyword gap to show.</p>',
+                    unsafe_allow_html=True)
+
+        # ── Section coverage ───────────────────────────────────────────────────
         st.markdown("<br>", unsafe_allow_html=True)
         st.markdown('<div class="card-label">📊 SECTION ANALYSIS</div>', unsafe_allow_html=True)
 
-        sections = {
-            "Skills":        ("skills" in clean_resume or "technologies" in clean_resume, "#7c6cfc"),
-            "Experience":    ("experience" in clean_resume or "work" in clean_resume, "#6cfcd8"),
-            "Education":     ("education" in clean_resume or "university" in clean_resume or "degree" in clean_resume, "#f9d56e"),
-            "Certifications":("certif" in clean_resume or "aws" in clean_resume or "google" in clean_resume, "#fc8f6c"),
-            "Projects":      ("project" in clean_resume, "#fc6c8f"),
-        }
         cols = st.columns(5)
-        for i, (section, (found, color)) in enumerate(sections.items()):
+        for i, (section, found) in enumerate(sections.items()):
+            color = SECTION_COLORS[section]
             with cols[i]:
                 status = "✓ Found" if found else "✗ Missing"
                 c = color if found else "#6b6b80"
@@ -562,7 +647,7 @@ if analyze:
         st.markdown("<br>", unsafe_allow_html=True)
         st.markdown('<div class="card-label">💡 IMPROVEMENT SUGGESTIONS</div>', unsafe_allow_html=True)
 
-        suggestions = generate_suggestions(list(missing), score, res_words, jd_words)
+        suggestions = generate_suggestions(sorted(missing), score, sections)
         for s in suggestions:
             st.markdown(f"""
             <div class="suggestion">
@@ -579,8 +664,8 @@ if analyze:
         t1, t2, t3 = st.columns(3)
         tips = [
             ("🎯", "#7c6cfc", "One resume per job", "Never send a generic resume. Tailor every application to the specific role."),
-            ("🤖", "#6cfcd8", "Beat the ATS first", "70% of resumes are rejected before a human sees them. Keywords are your first gate."),
-            ("📈", "#f9d56e", "Target 60–80% score", "A perfect 100% may look keyword-stuffed. Aim for natural, high-relevance language."),
+            ("🤖", "#6cfcd8", "Beat the ATS first", "Many companies filter resumes with ATS software. The job's keywords are your first gate."),
+            ("📈", "#f9d56e", "Keywords, not stuffing", "Use the job's keywords where they are true for you. Copying phrases you cannot back up will hurt you in the interview."),
         ]
         for col, (icon, color, title, body) in zip([t1, t2, t3], tips):
             with col:
